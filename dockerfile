@@ -9,7 +9,7 @@ RUN git clone https://github.com/tsl0922/ttyd.git
 RUN cd ttyd
 RUN mkdir build
 RUN cd build
-RUN cmake CMAKE_SOURCE_DIR:/ttyd ..
+RUN cmake ttyd ..
 RUN make
 RUN sudo make install
 
