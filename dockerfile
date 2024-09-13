@@ -3,8 +3,9 @@ FROM python:3.8-slim
 # Install dependencies including ffmpeg
 RUN apt-get update && apt-get install -y \
     build-essential \
-    curl \
-    && curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash \
+    wget \
+    && wget https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -O /tmp/install.sh \
+    && bash /tmp/install.sh \
     && export PATH="/root/.linuxbrew/bin:$PATH" \
     && brew install ttyd ffmpeg \
     && apt-get clean
