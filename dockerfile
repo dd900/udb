@@ -1,10 +1,7 @@
 FROM python:3.8-slim
 
 # Install dependencies including ffmpeg
-RUN apt-get update && apt-get install -y \
-    ttyd \
-    ffmpeg \
-    && apt-get clean
+RUN apt-get update && apt-get install -y ttyd ffmpeg && apt-get clean
 
 # Set working directory
 WORKDIR /app
