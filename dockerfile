@@ -1,36 +1,14 @@
-FROM debian:bullseye-slim
+FROM python:3.8-slim
 
 # Install dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    build-essential \
-    libssl-dev \
-    zlib1g-dev \
-    libncurses5-dev \
-    libgdbm-dev \
-    libnss3-dev \
-    libreadline-dev \
-    libffi-dev \
-    libbz2-dev \
-    wget \
-    && apt-get clean
+RUN apt-get update
+RUN apt-get install -y ffmpeg build-essential cmake git libjson-c-dev libwebsockets-dev
+RUN apt-get clean
 
-# Install Homebrew
-RUN curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash
-
-# Update PATH for Homebrew
-ENV PATH="/root/.linuxbrew/bin:/root/.linuxbrew/sbin:$PATH"
-
-# Install Python 3.8 using Homebrew
-RUN brew install python@3.8 ttyd ffmpeg
-
-# Set Python 3.8 as the default python
-RUN ln -s /root/.linuxbrew/bin/python3.8 /usr/local/bin/python3
-RUN ln -s /root/.linuxbrew/bin/pip3.8 /usr/local/bin/pip
-
-# Verify installations
-RUN python3 --version
-RUN pip --version
+RUN git clone https://github.com/tsl0922/ttyd.git
+RUN cd ttyd && mkdir build && cd build
+RUN cmake ..
+RUN make && sudo make install
 
 # Set working directory
 WORKDIR /app
