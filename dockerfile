@@ -17,4 +17,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 7681
 
 # Default command
-CMD ["ttyd", "bash"]
+CMD ["ttyd", "-W", "bash"]
