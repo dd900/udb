@@ -9,8 +9,10 @@ WORKDIR /app
 
 # Copy project files
 COPY . /app
-RUN mkdir /app/temp
-RUN mkdir /app/downloads
+RUN mkdir /app/temp-tv
+RUN mkdir /app/temp-movie
+RUN mkdir /app/downloads-tv
+RUN mkdir /app/downloads-movie
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
