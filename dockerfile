@@ -9,6 +9,8 @@ WORKDIR /app
 
 # Copy project files
 COPY . /app
+RUN mkdir /app/temp
+RUN mkdir /app/downloads
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
