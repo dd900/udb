@@ -1,0 +1,10 @@
+services:
+    udb:
+        image: dd900/udb-web-terminal:latest
+        container_name: udb
+        ports:
+            - 7681:7681
+        volumes:
+            - ./downloads:/app/downloads
+            #- ./temp:/app/temp	(optional)
+        restart: unless-stopped
