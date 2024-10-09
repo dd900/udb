@@ -1,7 +1,7 @@
 services:
     udb:
         image: dd900/udb-web-terminal:latest
-        container_name: udb-web
+        container_name: udb
         ports:
             - 7681:7681
         volumes:
