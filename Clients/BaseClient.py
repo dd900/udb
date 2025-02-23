@@ -188,15 +188,17 @@ class BaseClient():
         '''
         return stream link for extracting download links
         '''
+        pad_https = lambda x: 'https:' + x if x.startswith('/') else x
         self.logger.debug(f'Extract stream link from soup for {link = }')
         soup = self._get_bsoup(link)
         # self.logger.debug(f'bsoup response for {link = }: {soup}')
         for stream in soup.select(stream_links_element):
-            if 'active' in stream.get('class'):
+            if 'iframe' in stream_links_element:
+                stream_link = stream['src']
+                return pad_https(stream_link)
+            elif 'active' in stream.get('class'):
                 stream_link = stream['data-video']
-                if stream_link.startswith('/'):
-                    stream_link = 'https:' + stream_link
-                return stream_link
+                return pad_https(stream_link)
 
     # step-4.2.2.1 -- used in GogoAnime, MyAsianTV
     def _parse_m3u8_links(self, master_m3u8_link, referer):
@@ -218,9 +220,29 @@ class BaseClient():
         resolution_links = _regex_list(master_m3u8_data, '(.*)m3u8', 0)
         self.logger.debug(f'Resolutions data: {resolutions = }, {resolution_names = }, {resolution_links = }')
 
+        if len(resolution_links) == 0:
+            # check for original keyword in the link, or if '#EXT-X-ENDLIST' in m3u8 data
+            self.logger.debug('Child resolutions not found. Checking if master link is original link')
+            master_is_child = re.search('#EXT-X-ENDLIST', master_m3u8_data)
+            if 'original' in master_m3u8_link or master_is_child:
+                self.logger.debug('master m3u8 link itself is the download link')
+                # treat is as mp4 to fetch metadata using ffprobe
+                duration, size, resolution = self._get_video_metadata(master_m3u8_link, 'mp4', referer)
+                m3u8_links[resolution.split('x')[-1]] = {
+                    'resolution_size': resolution,
+                    'downloadLink': master_m3u8_link,
+                    'downloadType': 'hls',
+                    'duration': pretty_time(duration)
+                }
+                # get approx download size and add file size if available
+                file_size = self._get_download_size(master_m3u8_link, referer)
+                if file_size: m3u8_links['1080'].update({'filesize_mb': file_size})
+
+            return m3u8_links
+
         # calculate duration from any resolution, as it is same for all resolutions
         temp_link = _full_link(resolution_links[0]) if resolution_links else master_m3u8_link
-        duration = pretty_time(self._get_video_metadata(temp_link, 'hls')[0])
+        duration = pretty_time(self._get_video_metadata(temp_link, 'hls', referer)[0])
 
         for _res, _pixels, _link in zip(resolution_names, resolutions, resolution_links):
             # prepend base url if it is relative url
@@ -232,34 +254,18 @@ class BaseClient():
                 'duration': duration
             }
             # get approx download size and add file size if available
-            file_size = self._get_download_size(m3u8_link)
-            if file_size: m3u8_links[_res.replace('p','')].update({'filesize': file_size})
-
-        if len(m3u8_links) == 0:
-            # check for original keyword in the link, or if '#EXT-X-ENDLIST' in m3u8 data
-            self.logger.debug('Child resolutions not found. Checking if master link is original link')
-            master_is_child = re.search('#EXT-X-ENDLIST', master_m3u8_data)
-            if 'original' in master_m3u8_link or master_is_child:
-                self.logger.debug('master m3u8 link itself is the download link')
-                m3u8_links['1080'] = {                            # set resolution size to 1080 (assuming it as default. could be wrong)
-                    'resolution_size': 'Original (HD)',
-                    'downloadLink': master_m3u8_link,
-                    'downloadType': 'hls',
-                    'duration': duration
-                }
-                # get approx download size and add file size if available
-                file_size = self._get_download_size(master_m3u8_link)
-                if file_size: m3u8_links['1080'].update({'filesize': file_size})
+            file_size = self._get_download_size(m3u8_link, referer)
+            if file_size: m3u8_links[_res.replace('p','')].update({'filesize_mb': file_size})
 
         return m3u8_links
 
     # step-4.2.2.2 -- used in GogoAnime, MyAsianTV
-    def _get_video_metadata(self, link, link_type='mp4'):
+    def _get_video_metadata(self, link, link_type='mp4', referer=None):
         '''
         return duration & size of the video using ffprobe command
         Note: size is available only for mp4 links
         '''
-        duration, size = 0, None
+        duration, size, resolution = 0, None, None
         try:
             # Note: ffprobe is taking 3-10s, so try to avoid as much as possible
             if link_type == 'hls':
@@ -268,18 +274,22 @@ class BaseClient():
                 duration = sum([ float(match.group(1)) for match in re.finditer('#EXTINF:(.*),', data) ])
             else:
                 # add -show_streams in ffprobe to get more information
-                self.logger.debug('Fetching video duration using ffprobe command')
-                video_metadata = json.loads(self._exec_cmd(f'ffprobe -loglevel quiet -print_format json -show_format {link}'))
-                duration = float(video_metadata.get('format').get('duration'))
-                size = float(video_metadata.get('format').get('size'))
-                self.logger.debug(f'Size fetched is {size} bytes')
+                ffprobe_cmd = f'ffprobe -loglevel quiet -print_format json -show_format -select_streams v:0 -show_entries stream=width,height'
+                if referer:
+                    ffprobe_cmd += f' -referer "{referer}"'
+                self.logger.debug(f'Fetching video duration using ffprobe command: {ffprobe_cmd} "{link}"')
+                video_metadata = json.loads(self._exec_cmd(f'{ffprobe_cmd} "{link}"'))
+                duration = float(video_metadata.get('format', {}).get('duration', 0))
+                size = float(video_metadata.get('format', {}).get('size', 0))
+                resolution = f"{video_metadata.get('streams', [{}])[0].get('width')}x{video_metadata.get('streams', [{}])[0].get('height')}"
+                self.logger.debug(f'Size fetched is {size} bytes, Resoltion: {resolution}')
 
             self.logger.debug(f'Duration fetched is {duration} seconds')
 
         except Exception as e:
             self.logger.warning(f'Failed to fetch video duration. Error: {e}')
 
-        return round(duration), size
+        return round(duration), size, resolution
 
     @threaded()
     def _fetch_content_length(self, url):
@@ -292,7 +302,7 @@ class BaseClient():
         return content_len
 
     # step-4.2.2.1.1
-    def _get_download_size(self, m3u8_link):
+    def _get_download_size(self, m3u8_link, referer=None):
         '''
         return the download file size (in MB) of a HLS stream based on estimation quality.
         '''
@@ -300,7 +310,7 @@ class BaseClient():
             if self.hls_size_accuracy == 0:     # this parameter should be defined in respective client initialization
                 return None                     # do nothing if disabled
             self.logger.debug(f'Calculating download size for {m3u8_link = }')
-            m3u8_data = self._send_request(m3u8_link)
+            m3u8_data = self._send_request(m3u8_link, referer=referer)
             # extract ts segment urls. same as in HLS downloader
             base_url = '/'.join(m3u8_link.split('/')[:-1])
             normalize_url = lambda url, base_url: (url if url.startswith('http') else f'{base_url}/{url}')
@@ -429,6 +439,7 @@ class BaseClient():
         - Sort the resolutions in ascending order
         '''
         link, preferred_urls, blacklist_urls = config_data
+        pad_https = lambda x: 'https:' + x if x.startswith('//') else x
         # re-order urls based on user preference
         ordered_download_links = [ j for i in preferred_urls for j in download_links if i in j.get('file') ]
         # append remaining urls
@@ -447,10 +458,10 @@ class BaseClient():
 
         for download_link in ordered_download_links:
             counter += 1
-            dlink = download_link.get('file')
+            dlink = pad_https(download_link.get('file'))
             dtype = download_link.get('type', '').strip().lower()
             # set default download type as HLS if link name ends with m3u8
-            if dtype == '' and dlink.endswith('.m3u8'):
+            if dtype == '' and dlink.split('?')[0].endswith('.m3u8'):
                 dtype = 'hls'
 
             if dtype == 'hls':
@@ -474,11 +485,11 @@ class BaseClient():
             elif dtype == 'mp4':
                 # if link is mp4, it is a direct download link
                 self.logger.debug(f'Found mp4 link. Adding the direct download link [{dlink}]')
-                duration, file_size = self._get_video_metadata(dlink, link_type='mp4')
+                duration, file_size, resolution = self._get_video_metadata(dlink, link_type='mp4', referer=link)
                 duration = pretty_time(duration)
-                resltn = download_link.get('label', 'unknown').split()[0]
+                resltn = resolution.split('x')[-1]
                 resolution_links[resltn] = {
-                    'resolution_size': resltn,
+                    'resolution_size': resolution,
                     'downloadLink': dlink,
                     'downloadType': 'mp4',
                     'duration': duration
@@ -486,7 +497,7 @@ class BaseClient():
                 # get actual download size and add file size if available
                 if file_size:
                     file_size = round(file_size / (1024**2))    # Bytes to MB
-                    resolution_links[resltn].update({'filesize': file_size})
+                    resolution_links[resltn].update({'filesize_mb': file_size})
 
             else:
                 # unknown download type
@@ -518,7 +529,7 @@ class BaseClient():
 
         for _res, _vals in details.items():
             info += f' | {_res}P ({_vals["resolution_size"]})' #| URL: {_vals["downloadLink"]}
-            if 'filesize' in _vals: info += f' [~{_vals["filesize"]} MB]'
+            if 'filesize_mb' in _vals: info += f' [~{_vals["filesize_mb"]} MB]'
 
         self._colprint('results', info)
 
@@ -545,6 +556,9 @@ class BaseClient():
             elif type(ep) == str and ep.startswith('m'):
                 display_prefix = 'Movie'
                 ep_no = int(ep.replace('m', ''))
+            elif self.udb_episode_dict.get(ep).get('episodeName').endswith('Movie'):
+                display_prefix = 'Movie'
+                ep_no = ep
             else:
                 ep_no = ep
 

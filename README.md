@@ -2,8 +2,16 @@
 
 Welcome to the UDB, the Ultimate-Download-Bot for Anime, Drama, Movies & TV Shows! 🎉
 
-## UPDATE
-__Work in-progress to restore support for Drama and Movies/Series Clients.__
+## Current Status (as on 2024-10-08)
+| S.No | Category           | Website                                   | Status |
+| :--: | :----------------- | :---------------------------------------: | :----: |
+|   1  | Anime              | [GogoAnime](https://anitaku.to/)          | Active (But no updates after Nov' 24, 2024) |
+|   2  | Anime              | [AnimePahe](https://animepahe.ru/)        | Active |
+|   3  | Drama              | [MyAsianTV](https://myasiantv.ac/)        | Inactive |
+|   4  | Drama              | [Asianbxkiun](https://asianbxkiun.pro/)   | Active (But no updates after Nov' 24, 2024) |
+|   5  | Movies & TV Shows  | [Vidsrc](https://vidsrc.to/)              | Support discontinued |
+|   6  | Movies & TV Shows  | [Superembed](https://streambucket.net/)   | Support discontinued |
+|   7  | Anime, Drama, Movies & TV Shows | [KissKh](https://kisskh.co/) | Active (But no multi-resolutions) |
 
 ## Insipiration
 
@@ -70,7 +78,7 @@ To use the UDB, make sure you have the following requirements met:
 4. Edit the configuration in your favourite editor: __Make sure to set the download path__
 
     ```
-    vi config.yaml
+    vi config_udb.yaml
     ```
 
 5. You're all set! Start downloading your favorite series by running:

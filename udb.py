@@ -12,13 +12,14 @@ from Utils.commons import create_logger, load_yaml, pretty_time, strip_ansi, thr
 from Utils.commons import VersionManager
 
 
+ACTIVE_CLIENTS = ['Anime (Animepahe)', 'Anime, Drama, Movies & TV Shows (Kisskh)']
+HIDDEN_CLIENTS = ['Anime (Gogoanime)', 'Drama (Asianbxkiun)']       # obsolete clients
 get_current_time = lambda fmt='%F %T': datetime.now().strftime(fmt)
 
 def get_client():
     '''Return a client instance'''
     # add hls_size_accuracy parameter passed from cli
-    config[series_type].update({'hls_size_accuracy': hls_size_accuracy})
-    __base_url = config[series_type].get('base_url', '').lower()
+    config.setdefault(series_type, {}).update({'hls_size_accuracy': hls_size_accuracy})
     # Load required Client based on user selection, to avoid unnecessary imports
     if 'animepahe' in series_type.lower():
         logger.debug('Creating Anime Client for AnimePahe site')
@@ -28,18 +29,14 @@ def get_client():
         logger.debug('Creating Anime Client for GogoAnime site')
         from Clients.GogoAnimeClient import GogoAnimeClient
         return GogoAnimeClient(config[series_type])
-    elif 'drama' in series_type.lower():
-        logger.debug('Creating Drama Client')
-        from Clients.DramaClient import DramaClient
-        return DramaClient(config[series_type])
-    elif 'vidsrc' in series_type.lower():
-        logger.debug('Creating Movies/TV-Shows Vidsrc Client')
-        from Clients.VidSrcClient import VidSrcClient
-        return VidSrcClient(config[series_type])
-    elif 'superembed' in series_type.lower():
-        logger.debug('Creating Movies/TV-Shows Superembed Client')
-        from Clients.SuperembedClient import SuperembedClient
-        return SuperembedClient(config[series_type])
+    elif 'asianbxkiun' in series_type.lower():
+        logger.debug('Creating Asianbxkiun Drama Client')
+        from Clients.AsianDramaClient import AsianDramaClient
+        return AsianDramaClient(config[series_type])
+    elif 'kisskh' in series_type.lower():
+        logger.debug('Creating KissKh Drama Client')
+        from Clients.KissKhClient import KissKhClient
+        return KissKhClient(config[series_type])
     else:
         logger.error(f'Unknown series type: {series_type}')
         raise ExitException(1)
@@ -75,9 +72,8 @@ def get_series_type(keys, predefined_input=None):
     types = {}
     colprint('header', '\nSelect type of series:')
     for idx, typ in enumerate(keys):
-        if typ not in ['DownloaderConfig', 'LoggerConfig']:
-            colprint('results', f'{idx+1}: {typ}')
-            types[idx+1] = typ
+        colprint('results', f'{idx+1}: {typ}')
+        types[idx+1] = typ
 
     if predefined_input:
         colprint('predefined', f'\nUsing Predefined Input: {predefined_input}')
@@ -302,9 +298,13 @@ def close_handlers():
     '''
     Close handlers properly to ensure rotation works without issues
     '''
-    for handler in logger.handlers:
-        handler.close()
-        logger.removeHandler(handler)
+    try:
+        for handler in logger.handlers:
+            handler.close()
+            logger.removeHandler(handler)
+    except Exception as e:
+        if 'not defined' in str(e): return   # ignore if logger itself is not defined
+        print(f'Error while closing log handlers: {e}')
 
 
 if __name__ == '__main__':
@@ -319,6 +319,7 @@ if __name__ == '__main__':
         parser = argparse.ArgumentParser(description='UDB Client to download anime / drama / movies / series in one-shot.')
         parser.add_argument('-c', '--conf', default='config_udb.yaml',
                             help='configuration file for UDB client (default: config_udb.yaml)')
+        parser.add_argument('-H', '--hidden', default=False, action='store_true', help='show hidden clients')
         parser.add_argument('-l', '--log-file', help='custom file name for logging (default: udb_{YYYYMMDDHHMMSS}.log)')
         parser.add_argument('-v', '--version', default=False, action='store_true', help='display current version of UDB')
         parser.add_argument('-s', '--series-type', type=int, help='type of series')
@@ -331,10 +332,12 @@ if __name__ == '__main__':
         parser.add_argument('-dc', '--disable-colors', default=False, action='store_true', help='disable colored output')
         parser.add_argument('-hsa', '--hls-size-accuracy', default=0, type=int, choices=range(0, 101), metavar='[0-100]',
                             help='accuracy to display the file size of hls files. Use 0 to disable. Please enable only if required as it is slow')
+        parser.add_argument('-dl', '--disable-looping', default=False, action='store_true', help='disable auto-restart of UDB')
         parser.add_argument('-u', '--update', default=False, action='store_true', help='update UDB to the latest version available')
 
         args = parser.parse_args()
         config_file = args.conf
+        show_hidden_clients = args.hidden
         log_file_name = args.log_file
         # set the log_file_name
         if log_file_name is None:
@@ -352,6 +355,7 @@ if __name__ == '__main__':
         start_download_predef = 'y' if args.start_download else None
         disable_colors = args.disable_colors
         hls_size_accuracy = args.hls_size_accuracy
+        disable_looping = args.disable_looping
         update_flag = args.update
 
         # initialize color printer
@@ -395,12 +399,17 @@ if __name__ == '__main__':
         delete_old_logs(config['LoggerConfig']['log_dir'], config['LoggerConfig'].get('log_retention_days', 7), config['LoggerConfig'].get('log_backup_count', 3))
 
         # get series type
-        series_type = get_series_type(config.keys(), series_type_predef)
+        if show_hidden_clients: ACTIVE_CLIENTS.extend(HIDDEN_CLIENTS)
+        series_type = get_series_type(ACTIVE_CLIENTS, series_type_predef)
         logger.info(f'Selected Series type: {series_type}')
 
         # create client
         client = get_client()
         logger.info(f'Client: {client}')
+
+        # set client specific download configurations
+        if 'kisskh' in series_type.lower():
+            downloader_config['use_http_client'] = True
 
         # set respective download dir if present
         if 'download_dir' in config[series_type]:
@@ -542,7 +551,7 @@ if __name__ == '__main__':
         # Ensure to close handlers at the end of the script or before rotating
         close_handlers()
         # Auto-start a new UDB instance
-        if skip_restart: exit(0)
+        if skip_restart or disable_looping: exit(0)
         try:
             continuation_prompt = colprint('user_input', '\nReady for one more? Reload UDB (y|n)? ', input_type='recurring', input_options=['y', 'n', 'Y', 'N']).lower() or 'y'
             if continuation_prompt == 'y':

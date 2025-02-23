@@ -4,6 +4,7 @@ import logging
 import os
 import requests
 import sys
+import http.client
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from shutil import rmtree
 from tqdm.auto import tqdm
@@ -13,7 +14,7 @@ from Utils.commons import colprint, exec_os_cmd, retry, PRINT_THEMES, DISPLAY_CO
 
 class BaseDownloader():
     '''
-    Download Client for downloading files directly using requests
+    Download Client for downloading files directly using requests and http.client
     '''
     def __init__(self, dl_config, ep_details, session=None):
         # logger init
@@ -24,24 +25,29 @@ class BaseDownloader():
         # add extra folder for season
         if ep_details.get('type', '') == 'tv':
             self.out_dir = f"{self.out_dir}{os.sep}Season-{ep_details['season']}"
-        self.concurrency = dl_config['concurrency_per_file'] if dl_config['concurrency_per_file'] != 'auto' else None
-        self.parent_temp_dir = dl_config['temp_download_dir'] if dl_config['temp_download_dir'] != 'auto' else os.path.join(f'{self.out_dir}', 'temp_dir')
+        self.concurrency = None if dl_config.get('concurrency_per_file', 'auto') == 'auto' else dl_config['concurrency_per_file']
+        self.parent_temp_dir = os.path.join(f'{self.out_dir}', 'temp_dir') if dl_config.get('temp_download_dir', 'auto') == 'auto' else dl_config['temp_download_dir']
         self.temp_dir = os.path.join(f"{self.parent_temp_dir}", f"{self.out_file.replace('.mp4','')}") #create temp directory per episode
-        self.request_timeout = dl_config['request_timeout']
+        self.request_timeout = dl_config.get('request_timeout', 30)
         self.series_type = ep_details.get('type', 'series')
         self.subtitles = ep_details.get('subtitles', {})
-        self.referer = ep_details['refererLink']
+        # special case for encrypted subtitles in kisskh client
+        self.encrypted_subs_details = ep_details.get('encrypted_subs_details', {})
         self.thread_name_prefix = 'udb-mp4-'
 
         # create a requests session and use across to re-use cookies
         self.req_session = session if session else requests.Session()
 
+        # set http client usage based on config. As on Feb 21 2025, kisskh works with only http.client
+        self.use_http_client = dl_config.get('use_http_client', False)
+
         self.req_session.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
             "Accept-Encoding": "*",
-            "Connection": "keep-alive",
-            "Referer": self.referer
+            "Connection": "keep-alive"
         }
+        # update referer if defined
+        if ep_details.get('refererLink'): self.req_session.headers.update({"Referer": ep_details['refererLink']})
 
     def _colprint(self, theme, text, **kwargs):
         '''
@@ -53,24 +59,42 @@ class BaseDownloader():
             colprint(theme, text, **kwargs)
 
     def _get_raw_stream_data(self, url, stream=True, header=None):
-        # print(f'{self.req_session}: {url}')
-        if header is not None:
-            response = self.req_session.get(url, stream=stream, timeout=self.request_timeout, headers=header)
+        '''
+        Fetch raw stream data using requests or http.client
+        '''
+        if self.use_http_client:
+            # Use http.client for the request
+            parsed_url = requests.utils.urlparse(url)
+            conn = http.client.HTTPSConnection(parsed_url.netloc, timeout=self.request_timeout)
+            path = parsed_url.path + '?' + parsed_url.query
+            headers = self.req_session.headers.copy()
+            if header: headers.update(header)
+            conn.request("GET", path, headers=headers)
+            response = conn.getresponse()
+            if response.status in [200, 206]:  # 206 means partial data (i.e., for chunked downloads)
+                return response
+            else:
+                raise Exception(f'Failed with response code: {response.status}')
         else:
-            response = self.req_session.get(url, stream=stream, timeout=self.request_timeout)
-        # print(response)
-
-        if response.status_code in [200, 206]:  # 206 means partial data (i.e., for chunked downloads)
-            return response
-        else:
-            raise Exception(f'Failed with response code: {response.status_code}')
+            # Use requests for the request
+            headers = self.req_session.headers.copy()
+            if header: headers.update(header)
+            response = self.req_session.get(url, stream=stream, timeout=self.request_timeout, headers=headers)
+            if response.status_code in [200, 206]:  # 206 means partial data (i.e., for chunked downloads)
+                return response
+            else:
+                raise Exception(f'Failed with response code: {response.status_code}')
 
     def _get_stream_data(self, url, to_text=False, stream=False):
         response = self._get_raw_stream_data(url, stream)
-        return response.text if to_text else response.content
+        if self.use_http_client:
+            data = response.read()
+            return data.decode('utf-8') if to_text else data
+        else:
+            return response.text if to_text else response.content
 
     def _create_out_dirs(self):
-        self.logger.debug(f'Creating outout directories: {self.out_dir}')
+        self.logger.debug(f'Creating output directories: {self.out_dir}')
         os.makedirs(self.out_dir, exist_ok=True)
         os.makedirs(self.temp_dir, exist_ok=True)
 
@@ -89,11 +113,11 @@ class BaseDownloader():
         # shorten the name to show only ep number
         try:
             # set display prefix based on series type if defined
-            if self.series_type == 'tv':
+            if self.series_type.lower() == 'tv':
                 ss_no = self.out_dir.split('-')[-1]
                 ep_no = self.out_file.split()[1]
                 return f'S{int(ss_no):02d}E{int(ep_no):02d}'
-            elif self.series_type == 'movie':
+            elif self.series_type.lower() == 'movie':
                 return 'Movie'
 
             ep_no = self.out_file.split()[-3]
@@ -133,9 +157,16 @@ class BaseDownloader():
             # capture the size to update progress bar
             size = 0 
             with open(chunk_file, 'wb') as f:
-                for chunk in response.iter_content(self.chunk_size):
-                    if chunk:
+                if isinstance(response, http.client.HTTPResponse):
+                    while True:
+                        chunk = response.read(self.chunk_size)
+                        if not chunk:
+                            break
                         size += f.write(chunk)
+                else:
+                    for chunk in response.iter_content(self.chunk_size):
+                        if chunk:
+                            size += f.write(chunk)
 
             return (f'Chunk [{chunk_name}] downloaded', size)
 
@@ -197,6 +228,80 @@ class BaseDownloader():
                 # remove the merged chunk
                 os.remove(chunk_file)
 
+    def _download_subtitles(self):
+        for sub_name in list(self.subtitles):
+            sub_link = self.subtitles[sub_name]
+            sub_file = os.path.join(self.temp_dir, sub_name.replace(' ', '_') + '_' + os.path.basename(sub_link.split('?')[0]))
+            # update the dictionary pointing to downloaded file
+            self.subtitles[sub_name] = sub_file
+
+            try:
+                self.logger.debug(f'Downloading {sub_name} subtitle from {sub_link} to {sub_file}')
+                if os.path.isfile(sub_file):
+                    self.logger.debug('Subtitle file already exists. Skipping...')
+                    continue
+                sub_content = self._get_stream_data(sub_link)
+                # download the subtitle to local
+                with open(sub_file, 'wb') as f:
+                    f.write(sub_content)
+
+                if self.encrypted_subs_details.get(sub_name):
+                    self._decrypt_subtitle_file(sub_file, **self.encrypted_subs_details[sub_name])
+
+            except Exception as e:
+                self.logger.warning(f'Failed to download {sub_name} subtitle with error: {e}')
+                self.subtitles.pop(sub_name)
+
+    def _decrypt_subtitle_file(self, sub_file, **kwargs):
+        self.logger.debug(f'Decrypting subtitle file: {sub_file}')
+        decrypter = kwargs['decrypter']
+        subs_key, subs_iv = kwargs['key'], kwargs['iv']
+
+        with open(sub_file, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+
+        decryption_fail_count = 0
+        total_line_count = 0
+        with open(sub_file, 'w', encoding='utf-8') as file:
+            for line in lines:
+                if line.strip() and not line.strip().isdigit() and "-->" not in line:
+                    try:
+                        # decrypt and replace subtitle text lines
+                        file.write(decrypter(line.strip(), subs_key, subs_iv) + '\n')
+                        total_line_count += 1
+                    except:
+                        # write the line as-is if decryption fails
+                        file.write(line)
+                        decryption_fail_count += 1
+                else:
+                    # write sequence numbers, timestamps, and empty lines as-is
+                    file.write(line)
+        if decryption_fail_count > 0:
+            self.logger.warning(f'Failed to decrypt {decryption_fail_count}/{total_line_count} lines in the subtitle file')
+
+    def _add_subtitles(self):
+        # print(f'Converting {self.out_file} to mp4')
+        out_file = os.path.join(f'{self.out_dir}', f'{self.out_file}')
+        # ffmpeg can't do in-place conversion. So, create a temp file and replace the original file
+        temp_out_file = os.path.join(f'{self.out_dir}', f'temp_{self.out_file}')
+        command = [f'ffmpeg -loglevel warning -i "{out_file}"']
+        maps = ['-map 0:v -map 0:a'] if self.subtitles else []
+        metadata = []
+
+        # Prepare the command if subtitles are present
+        for i, (lang, url) in enumerate(self.subtitles.items(), start=1):
+            command.append(f'-i "{url}"')
+            maps.append(f'-map {i}')
+            metadata.append(f'-metadata:s:s:{i-1} title="{lang}"')
+
+        metadata.append(f'-c:v copy -c:a copy -c:s mov_text -bsf:a aac_adtstoasc "{temp_out_file}"')
+
+        cmd = ' '.join(command + maps + metadata)
+        self._exec_cmd(cmd)
+
+        # Replace original file with the new file
+        os.replace(temp_out_file, out_file)
+
     def start_download(self, dl_link):
         # set chunk size to 1MiB
         self.chunk_size = 1024*1024
@@ -222,6 +327,12 @@ class BaseDownloader():
 
         self.logger.debug('Merging chunks to single file')
         self._merge_chunks(len(chunks))
+
+        if self.subtitles:
+            self.logger.debug('Downloading subtitles')
+            self._download_subtitles()
+            self.logger.debug('Adding subtitles to the video')
+            self._add_subtitles()
 
         # remove temp dir once completed and dir is empty
         self.logger.debug('Removing temporary directories')
