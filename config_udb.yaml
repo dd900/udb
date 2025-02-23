@@ -15,21 +15,7 @@ Anime (Animepahe):
   request_timeout: 30
   alternate_resolution_selector: 'lowest'
 
-Drama (Myasiantv):
-  request_timeout: 30
-  alternate_resolution_selector: 'lowest'
-  preferred_urls:
-  blacklist_urls:
-
-Movies & TV Shows (Vidsrc):
-  download_dir: /app/downloads
-  request_timeout: 30
-  alternate_resolution_selector: 'lowest'
-  preferred_urls:
-  blacklist_urls:
-
-Movies & TV Shows (Superembed):
-  download_dir: /app/downloads
+Drama (Asianbxkiun):
   request_timeout: 30
   alternate_resolution_selector: 'lowest'
   preferred_urls:
@@ -40,7 +26,7 @@ DownloaderConfig:
   temp_download_dir: /app/temp                     # If set to auto, creates a temp location under the target folder
   concurrency_per_file: auto                  # Concurrency to download segments in a m3u8 file
   request_timeout: 30
-  max_parallel_downloads: 5
+  max_parallel_downloads: 2
 
 LoggerConfig:
   log_level: INFO
