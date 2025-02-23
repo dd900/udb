@@ -12,7 +12,7 @@ class GogoAnimeClient(BaseClient):
     '''
     # step-0
     def __init__(self, config, session=None):
-        self.base_url = config.get('base_url', 'https://anitaku.to/')
+        self.base_url = config.get('base_url', 'https://anitaku.bz/')
         self.search_url = self.base_url + config.get('search_url', 'search.html?keyword=')
         self.episodes_list_url = config.get('episodes_list_url', 'ajax/load-list-episode?ep_start={ep_start}&ep_end={ep_end}&id=')
         self.episodes_list_id_element = config.get('episodes_list_id_element', 'div.anime_info_body input#movie_id')
